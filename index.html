@@ -17,6 +17,10 @@
         <div class="plate-frame">
           <canvas id="plateCanvas" width="390" height="190"></canvas>
         </div>
+        <div class="target-count-row">
+          <label for="targetCountInput">Characters to recognize (left to right)</label>
+          <input id="targetCountInput" type="number" min="1" max="2" step="1" value="1" disabled />
+        </div>
         <div class="actions">
           <button id="runBtn" disabled>Loading OpenCV...</button>
           <button id="batchBtn" disabled>Run 20-Sample Benchmark</button>

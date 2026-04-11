@@ -32,8 +32,12 @@
     // OCR sandbox. Keep all recognition knobs here.
     ocr: {
       mode: {
-        // Stage-1: only tune the first character.
-        targetIndices: [0],
+        // Stage starts from the first character and can expand left-to-right.
+        initialTargetCount: 1,
+        // Logical ceiling for full plate expansion.
+        maxSelectableCount: 7,
+        // UI ceiling for the current stage (next step: 2).
+        maxSelectableCountNow: 2,
         // Base text for template synthesis. Length must match full plate length.
         templateBaseText: "AA00000"
       },
@@ -80,6 +84,7 @@
   const plateCanvas = document.getElementById("plateCanvas");
   const plateCtx = plateCanvas.getContext("2d");
   const debugCanvas = document.getElementById("debugCanvas");
+  const targetCountInput = document.getElementById("targetCountInput");
   const runBtn = document.getElementById("runBtn");
   const batchBtn = document.getElementById("batchBtn");
   const qaBtn = document.getElementById("qaBtn");
@@ -98,6 +103,13 @@
   debugCanvas.height = HEIGHT;
 
   let templateBank = null;
+  const plateCharCount = TUNING.plateRenderer.lettersCount + TUNING.plateRenderer.digitsCount;
+  const currentStageMaxCount = Math.min(
+    TUNING.ocr.mode.maxSelectableCountNow,
+    TUNING.ocr.mode.maxSelectableCount,
+    plateCharCount
+  );
+  let activeTargetIndices = [];
 
   const toPercent = (value) => `${(value * 100).toFixed(1)}%`;
   const randPick = (pool) => pool[Math.floor(Math.random() * pool.length)];
@@ -253,7 +265,41 @@
   const getCharsetForIndex = (targetIndex) =>
     targetIndex < TUNING.plateRenderer.lettersCount ? LETTERS : DIGITS;
 
-  const targetLabel = () => TUNING.ocr.mode.targetIndices.map((index) => `#${index + 1}`).join(",");
+  const clampTargetCount = (value) => {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed)) return TUNING.ocr.mode.initialTargetCount;
+    return Math.max(1, Math.min(currentStageMaxCount, parsed));
+  };
+
+  const buildTargetIndices = (count) =>
+    Array.from({ length: clampTargetCount(count) }, (_, index) => index);
+
+  const targetLabel = () => activeTargetIndices.map((index) => `#${index + 1}`).join(",");
+  const targetSummary = () => `${activeTargetIndices.length} (${targetLabel()})`;
+
+  activeTargetIndices = buildTargetIndices(TUNING.ocr.mode.initialTargetCount);
+
+  const resetResultPanels = () => {
+    batchStatusEl.textContent = "Benchmark: not started";
+    setQaStatus("", "Quality gate: not started");
+    clearDiagnostics();
+    gtValue.textContent = "-";
+    predValue.textContent = "-";
+    matchValue.textContent = "-";
+  };
+
+  const refreshStatus = () => {
+    statusEl.textContent = `OpenCV.js runtime ready (target count: ${targetSummary()})`;
+  };
+
+  const applyTargetCount = (value, { resetUi = true } = {}) => {
+    const nextCount = clampTargetCount(value);
+    activeTargetIndices = buildTargetIndices(nextCount);
+    if (targetCountInput) targetCountInput.value = String(nextCount);
+    if (templateBank) templateBank = buildTemplateBankForCurrentMode();
+    refreshStatus();
+    if (resetUi) resetResultPanels();
+  };
 
   const createOCRPipeline = (config) => {
     const getInterpolationFlag = () => cv[config.normalize.resizeInterpolation] || cv.INTER_NEAREST;
@@ -287,9 +333,9 @@
       return { roiGray, roiBinary, normalized };
     };
 
-    const makeTargetRects = (packet) => {
+    const makeTargetRects = (packet, targetIndices) => {
       if (!packet.anchors || packet.anchors.length === 0) return [];
-      return config.mode.targetIndices
+      return targetIndices
         .map((targetIndex) => {
           const base = packet.anchors[targetIndex];
           if (!base) return null;
@@ -326,6 +372,7 @@
     const recognize = ({
       packet,
       templates,
+      targetIndices,
       expectedText = "",
       renderDebug = true,
       renderDiagnostics = true
@@ -335,7 +382,7 @@
       const debugMat = src.clone();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-      const targetRects = makeTargetRects(packet);
+      const targetRects = makeTargetRects(packet, targetIndices);
       const results = [];
 
       for (const rect of targetRects) {
@@ -455,12 +502,12 @@
 
   const buildTemplateBankForCurrentMode = () => {
     const bank = {};
-    if (TUNING.ocr.mode.targetIndices.length === 0) return bank;
-    if (TUNING.ocr.mode.templateBaseText.length !== 7) {
-      throw new Error("templateBaseText must have length 7.");
+    if (activeTargetIndices.length === 0) return bank;
+    if (TUNING.ocr.mode.templateBaseText.length !== plateCharCount) {
+      throw new Error(`templateBaseText must have length ${plateCharCount}.`);
     }
 
-    for (const targetIndex of TUNING.ocr.mode.targetIndices) {
+    for (const targetIndex of activeTargetIndices) {
       bank[targetIndex] = {};
       const charset = getCharsetForIndex(targetIndex);
 
@@ -471,7 +518,9 @@
         const src = cv.imread(packet.image);
         const gray = new cv.Mat();
         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-        const rect = ocrPipeline.makeTargetRects(packet).find((item) => item.index === targetIndex);
+        const rect = ocrPipeline
+          .makeTargetRects(packet, [targetIndex])
+          .find((item) => item.index === targetIndex);
         if (!rect) {
           src.delete();
           gray.delete();
@@ -501,12 +550,13 @@
     const results = ocrPipeline.recognize({
       packet,
       templates: templateBank,
+      targetIndices: activeTargetIndices,
       expectedText,
       renderDebug,
       renderDiagnostics
     });
 
-    const primaryTargetIndex = TUNING.ocr.mode.targetIndices[0];
+    const primaryTargetIndex = activeTargetIndices[0];
     const targetResult = results.find((result) => result.index === primaryTargetIndex) || null;
     if (emitLogs) {
       log(
@@ -526,7 +576,7 @@
         if (result.diagnostics) renderDiagnosticCard(result.diagnostics);
       }
     }
-    return targetResult;
+    return { targetResult, results };
   };
 
   const runSingleSample = () => {
@@ -539,18 +589,18 @@
     log(`1) Generated plate text: ${packet.groundTruth}.`);
 
     const expectedByIndex = {};
-    for (const targetIndex of TUNING.ocr.mode.targetIndices) {
+    for (const targetIndex of activeTargetIndices) {
       expectedByIndex[targetIndex] = packet.groundTruth[targetIndex] || "";
     }
-    const firstTargetIndex = TUNING.ocr.mode.targetIndices[0];
-    const firstExpected = expectedByIndex[firstTargetIndex] || "";
-    gtValue.textContent = `${packet.groundTruth} | target ${targetLabel()}: ${Object.values(expectedByIndex).join("")}`;
+    const expectedByOrder = activeTargetIndices.map((targetIndex) => expectedByIndex[targetIndex] || "");
+    gtValue.textContent =
+      `${packet.groundTruth} | target ${targetLabel()}: ${expectedByOrder.join("")}`;
     predValue.textContent = "-";
     matchValue.textContent = "-";
 
-    let targetResult = null;
+    let recognitionOutput = null;
     try {
-      targetResult = runRecognitionForPacket({
+      recognitionOutput = runRecognitionForPacket({
         packet,
         renderDebug: true,
         renderDiagnostics: true,
@@ -563,14 +613,21 @@
       return;
     }
 
-    const prediction = targetResult?.predicted || "";
-    predValue.textContent = `${prediction || "(empty)"} (target #${firstTargetIndex + 1})`;
-    if (prediction === firstExpected) {
+    const results = recognitionOutput?.results || [];
+    const predictionByIndex = new Map(results.map((result) => [result.index, result.predicted]));
+    const predictedByOrder = activeTargetIndices.map(
+      (targetIndex) => predictionByIndex.get(targetIndex) || "?"
+    );
+    predValue.textContent = `${predictedByOrder.join("")} (target ${targetLabel()})`;
+    const allMatched = activeTargetIndices.every(
+      (targetIndex) => (predictionByIndex.get(targetIndex) || "") === (expectedByIndex[targetIndex] || "")
+    );
+    if (allMatched) {
       matchValue.textContent = "Matched ✅";
-      log("4) Primary target character prediction equals ground truth.");
+      log("4) Target character set prediction equals ground truth.");
     } else {
       matchValue.textContent = "Not matched ❌";
-      log("4) Primary target character prediction differs from ground truth.");
+      log("4) Target character set prediction differs from ground truth.");
     }
   };
 
@@ -587,10 +644,10 @@
         const results = ocrPipeline.recognize({
           packet,
           templates: templateBank,
+          targetIndices: activeTargetIndices,
           expectedText: packet.groundTruth,
           renderDebug: false,
-          renderDiagnostics: false,
-          emitLogs: false
+          renderDiagnostics: false
         });
         resultMap = new Map(results.map((result) => [result.index, result.predicted]));
       } catch (error) {
@@ -598,7 +655,7 @@
       }
 
       let sampleAllMatched = true;
-      for (const targetIndex of TUNING.ocr.mode.targetIndices) {
+      for (const targetIndex of activeTargetIndices) {
         const expected = packet.groundTruth[targetIndex] || "";
         const predicted = resultMap.get(targetIndex) || "";
         totalChars += 1;
@@ -652,18 +709,25 @@
   window.addEventListener("opencv-ready", () => {
     const initialPacket = plateRenderer.generatePacket("AB12345");
     renderPacketToMainCanvas(initialPacket);
-    templateBank = buildTemplateBankForCurrentMode();
 
     runBtn.disabled = false;
     batchBtn.disabled = false;
     qaBtn.disabled = false;
     runBtn.textContent = "Generate & Recognize";
-    statusEl.textContent = `OpenCV.js runtime ready (single-char mode: target ${targetLabel()})`;
-    clearDiagnostics();
-    gtValue.textContent = "-";
-    predValue.textContent = "-";
-    matchValue.textContent = "-";
+    if (targetCountInput) {
+      targetCountInput.min = "1";
+      targetCountInput.max = String(currentStageMaxCount);
+      targetCountInput.disabled = false;
+    }
+    templateBank = buildTemplateBankForCurrentMode();
+    applyTargetCount(TUNING.ocr.mode.initialTargetCount, { resetUi: true });
   });
+
+  if (targetCountInput) {
+    targetCountInput.addEventListener("input", () => {
+      applyTargetCount(targetCountInput.value, { resetUi: true });
+    });
+  }
 
   runBtn.addEventListener("click", runSingleSample);
   batchBtn.addEventListener("click", () => runBenchmark(TUNING.evaluation.quickSamples));
