@@ -13,6 +13,27 @@ The page generates a random Ontario-style plate (`LLDDDDD`), runs OpenCV-based p
 6. Show step-by-step logs, a debug view, and final match status.
 7. Run a 20-sample benchmark for quick quality checks.
 8. Run a 100-sample quality gate (ground truth vs prediction) as a unit-test loop after changes.
+9. Tune all recognition parameters from the centralized `TUNING` object in `app.js`.
+10. Inspect per-character diagnostics (ROI, binary, normalized, best template, diff, top candidates).
+
+## Sandbox Architecture (Renderer vs OCR)
+
+The project now uses a two-sandbox structure so rendering and recognition remain decoupled:
+
+- `PlateRenderer` sandbox:
+  - Responsible only for drawing the full plate image.
+  - Returns a frame packet (`image`, `groundTruth`, `anchors`) to downstream consumers.
+  - Can be replaced by camera input in the future without changing OCR internals.
+
+- `OCRPipeline` sandbox:
+  - Consumes only frame packet data (`image` + optional `anchors`) and does not call rendering internals.
+  - Handles ROI extraction, normalization, matching, diagnostics, benchmark, and quality-gate loops.
+  - Supports low-coupling expansion from single-character mode to multi-character mode by updating target indices and evaluation settings in `TUNING`.
+
+### Current Stage
+
+- Stage-1 tuning mode is enabled: only target character `#1` is recognized and evaluated.
+- Once stage-1 reaches stable 100% quality-gate pass, expand to `#1-#2`, then continue to all 7 positions.
 
 ## Project Structure
 
@@ -48,6 +69,9 @@ Then open `http://localhost:8080`.
 - Built-in validation loop:
   - `Run 20-Sample Benchmark`: quick metric snapshot.
   - `Run Quality Gate (100)`: pass/fail gate using exact accuracy, char accuracy, length validity, and pattern validity.
+- Built-in tuning support:
+  - All major parameters are centralized in `TUNING` (`app.js`).
+  - Character diagnostics panel helps explain why each character was predicted.
 - Useful next upgrades:
   - Add perspective warp and random noise for harder samples.
   - Add fallback OCR (for example Tesseract.js) as a second recognizer.
