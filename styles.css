@@ -116,6 +116,15 @@ button:disabled {
   font-weight: 600;
 }
 
+.credit {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f3550;
+  letter-spacing: 0.2px;
+}
+
 #logList {
   margin: 0;
   padding-left: 20px;

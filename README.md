@@ -40,12 +40,37 @@ The project now uses a two-sandbox structure so rendering and recognition remain
 
 ```text
 .
+├── assets/
+│   └── screenshots/
+│       ├── 1.png
+│       ├── 2.png
+│       └── 3.png
 ├── index.html
 ├── styles.css
 ├── app.js
 ├── .gitignore
 └── README.md
 ```
+
+## Screenshots
+
+### 1) Main Panel and Runtime Status
+
+`assets/screenshots/1.png` shows the plate canvas, target-count selector (`1..7`), action buttons, and runtime/benchmark/quality-gate status lines.
+
+![Main panel and runtime status](assets/screenshots/1.png)
+
+### 2) Segmentation Debug View
+
+`assets/screenshots/2.png` highlights left-to-right target selection with green boxes and per-box predicted characters drawn on the debug canvas.
+
+![Segmentation debug view](assets/screenshots/2.png)
+
+### 3) Character Diagnostics and Final Result
+
+`assets/screenshots/3.png` shows per-character diagnostic cards (`Gray ROI → Binary ROI → Normalized → Best Template → Abs Diff`) and the final ground-truth vs prediction summary.
+
+![Character diagnostics and final result](assets/screenshots/3.png)
 
 ## Local Run
 
