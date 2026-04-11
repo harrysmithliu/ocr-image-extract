@@ -3,6 +3,10 @@
 This is a pure frontend demo that does not use the camera.  
 The page generates a random Ontario-style plate (`LLDDDDD`), runs OpenCV-based processing, and prints both the recognition trace and final prediction.
 
+## Live Demo
+
+https://harrysmithliu.github.io/ocr-image-extract/
+
 ## Implementation Path
 
 1. Render a synthetic Ontario-style plate with `canvas`.
