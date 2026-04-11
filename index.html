@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ontario Plate Recognition Demo (OpenCV.js)</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Ontario Plate Recognition Demo (No Camera)</h1>
+      <p class="subtitle">
+        Generate a random Ontario-style plate and print the processing trace and result.
+      </p>
+
+      <section class="panel">
+        <div class="plate-frame">
+          <canvas id="plateCanvas" width="390" height="190"></canvas>
+        </div>
+        <div class="actions">
+          <button id="runBtn" disabled>Loading OpenCV...</button>
+          <button id="batchBtn" disabled>Run 20-Sample Benchmark</button>
+          <button id="qaBtn" disabled>Run Quality Gate (100)</button>
+        </div>
+        <p class="status" id="opencvStatus">Waiting for OpenCV.js runtime</p>
+        <p class="status" id="batchStatus">Benchmark: not started</p>
+        <p class="status" id="qaStatus">Quality gate: not started</p>
+      </section>
+
+      <section class="panel">
+        <h2>Recognition Trace</h2>
+        <ul id="logList"></ul>
+      </section>
+
+      <section class="panel">
+        <h2>Segmentation Debug View</h2>
+        <canvas id="debugCanvas" width="390" height="190"></canvas>
+      </section>
+
+      <section class="panel result">
+        <h2>Final Result</h2>
+        <p>Ground truth: <strong id="gtValue">-</strong></p>
+        <p>Prediction: <strong id="predValue">-</strong></p>
+        <p>Exact match: <strong id="matchValue">-</strong></p>
+      </section>
+    </main>
+
+    <script>
+      window.onOpenCvReady = function () {
+        if (window.cv) {
+          cv.onRuntimeInitialized = () => {
+            window.__opencvReady = true;
+            window.dispatchEvent(new CustomEvent("opencv-ready"));
+          };
+        }
+      };
+    </script>
+    <script
+      async
+      src="https://docs.opencv.org/4.10.0/opencv.js"
+      onload="onOpenCvReady();"
+      type="text/javascript"
+    ></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
