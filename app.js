@@ -32,12 +32,10 @@
     // OCR sandbox. Keep all recognition knobs here.
     ocr: {
       mode: {
-        // Stage starts from the first character and can expand left-to-right.
-        initialTargetCount: 1,
-        // Logical ceiling for full plate expansion.
+        // Milestone baseline: default to full 7-character recognition.
+        initialTargetCount: 7,
+        // Single source of truth for selector max and OCR expansion ceiling.
         maxSelectableCount: 7,
-        // UI ceiling for the current stage (next step: 2).
-        maxSelectableCountNow: 2,
         // Base text for template synthesis. Length must match full plate length.
         templateBaseText: "AA00000"
       },
@@ -70,9 +68,24 @@
     evaluation: {
       quickSamples: 20,
       qualitySamples: 100,
-      // Stage-1 goal for first character.
+      // Milestone gate: full-target exact match should stay at 100% in synthetic mode.
       minExact: 1.0,
-      maxRuntimeErrors: 0
+      maxRuntimeErrors: 0,
+      // Deterministic regression pack to catch accidental breakages after refactors.
+      regressionCases: [
+        "AB12345",
+        "AZ10000",
+        "BC90909",
+        "DF24680",
+        "EG13579",
+        "FJ75556",
+        "GR40969",
+        "HM54715",
+        "JK11111",
+        "LP40746",
+        "NU70269",
+        "OR77524"
+      ]
     }
   };
 
@@ -104,10 +117,9 @@
 
   let templateBank = null;
   const plateCharCount = TUNING.plateRenderer.lettersCount + TUNING.plateRenderer.digitsCount;
-  const currentStageMaxCount = Math.min(
-    TUNING.ocr.mode.maxSelectableCountNow,
-    TUNING.ocr.mode.maxSelectableCount,
-    plateCharCount
+  const currentStageMaxCount = Math.min(TUNING.ocr.mode.maxSelectableCount, plateCharCount);
+  const platePattern = new RegExp(
+    `^[A-Z]{${TUNING.plateRenderer.lettersCount}}[0-9]{${TUNING.plateRenderer.digitsCount}}$`
   );
   let activeTargetIndices = [];
 
@@ -300,6 +312,11 @@
     refreshStatus();
     if (resetUi) resetResultPanels();
   };
+
+  const getRegressionCases = () =>
+    (TUNING.evaluation.regressionCases || [])
+      .map((text) => String(text || "").trim().toUpperCase())
+      .filter((text) => text.length === plateCharCount && platePattern.test(text));
 
   const createOCRPipeline = (config) => {
     const getInterpolationFlag = () => cv[config.normalize.resizeInterpolation] || cv.INTER_NEAREST;
@@ -631,49 +648,77 @@
     }
   };
 
-  const collectMetrics = (sampleCount) => {
+  const evaluatePacket = (packet) => {
+    let resultMap = new Map();
+    let runtimeError = false;
+    try {
+      const results = ocrPipeline.recognize({
+        packet,
+        templates: templateBank,
+        targetIndices: activeTargetIndices,
+        expectedText: packet.groundTruth,
+        renderDebug: false,
+        renderDiagnostics: false
+      });
+      resultMap = new Map(results.map((result) => [result.index, result.predicted]));
+    } catch (error) {
+      runtimeError = true;
+    }
+
+    let sampleAllMatched = true;
+    let matchedChars = 0;
+    for (const targetIndex of activeTargetIndices) {
+      const expected = packet.groundTruth[targetIndex] || "";
+      const predicted = resultMap.get(targetIndex) || "";
+      if (predicted === expected) {
+        matchedChars += 1;
+      } else {
+        sampleAllMatched = false;
+      }
+    }
+
+    return {
+      runtimeError,
+      sampleAllMatched,
+      matchedChars,
+      totalChars: activeTargetIndices.length
+    };
+  };
+
+  const collectMetricsForPackets = (packets) => {
     let exactMatches = 0;
     let totalChars = 0;
     let matchedChars = 0;
     let runtimeErrors = 0;
 
-    for (let index = 0; index < sampleCount; index += 1) {
-      const packet = plateRenderer.generatePacket();
-      let resultMap = new Map();
-      try {
-        const results = ocrPipeline.recognize({
-          packet,
-          templates: templateBank,
-          targetIndices: activeTargetIndices,
-          expectedText: packet.groundTruth,
-          renderDebug: false,
-          renderDiagnostics: false
-        });
-        resultMap = new Map(results.map((result) => [result.index, result.predicted]));
-      } catch (error) {
-        runtimeErrors += 1;
-      }
-
-      let sampleAllMatched = true;
-      for (const targetIndex of activeTargetIndices) {
-        const expected = packet.groundTruth[targetIndex] || "";
-        const predicted = resultMap.get(targetIndex) || "";
-        totalChars += 1;
-        if (predicted === expected) {
-          matchedChars += 1;
-        } else {
-          sampleAllMatched = false;
-        }
-      }
-      if (sampleAllMatched) exactMatches += 1;
+    for (const packet of packets) {
+      const sample = evaluatePacket(packet);
+      totalChars += sample.totalChars;
+      matchedChars += sample.matchedChars;
+      if (sample.sampleAllMatched) exactMatches += 1;
+      if (sample.runtimeError) runtimeErrors += 1;
     }
 
     return {
-      sampleCount,
+      sampleCount: packets.length,
       runtimeErrors,
-      exactAccuracy: sampleCount > 0 ? exactMatches / sampleCount : 0,
+      exactAccuracy: packets.length > 0 ? exactMatches / packets.length : 0,
       charAccuracy: totalChars > 0 ? matchedChars / totalChars : 0
     };
+  };
+
+  const collectMetrics = (sampleCount) => {
+    const packets = [];
+    for (let index = 0; index < sampleCount; index += 1) {
+      packets.push(plateRenderer.generatePacket());
+    }
+    return collectMetricsForPackets(packets);
+  };
+
+  const collectRegressionMetrics = () => {
+    const regressionCases = getRegressionCases();
+    const packets = regressionCases.map((text) => plateRenderer.generatePacket(text));
+    return collectMetricsForPackets(packets);
   };
 
   const runBenchmark = (sampleCount = TUNING.evaluation.quickSamples) => {
@@ -687,21 +732,29 @@
 
   const runQualityGate = () => {
     const metrics = collectMetrics(TUNING.evaluation.qualitySamples);
+    const regressionMetrics = collectRegressionMetrics();
     const passed =
       metrics.exactAccuracy >= TUNING.evaluation.minExact &&
-      metrics.runtimeErrors <= TUNING.evaluation.maxRuntimeErrors;
+      metrics.runtimeErrors <= TUNING.evaluation.maxRuntimeErrors &&
+      regressionMetrics.exactAccuracy >= TUNING.evaluation.minExact &&
+      regressionMetrics.runtimeErrors <= TUNING.evaluation.maxRuntimeErrors;
     const summary =
       `Quality gate (${metrics.sampleCount}): ${passed ? "PASS" : "FAIL"} | ` +
       `Exact(target ${targetLabel()}) ${toPercent(metrics.exactAccuracy)} ` +
       `Char ${toPercent(metrics.charAccuracy)} ` +
-      `Errors ${metrics.runtimeErrors}`;
+      `| Regression(${regressionMetrics.sampleCount}) Exact ${toPercent(regressionMetrics.exactAccuracy)} ` +
+      `| Errors random:${metrics.runtimeErrors} regression:${regressionMetrics.runtimeErrors}`;
 
     setQaStatus(passed ? "pass" : "fail", summary);
     console.table({
       sample_count: metrics.sampleCount,
       exact_target: toPercent(metrics.exactAccuracy),
       char_accuracy: toPercent(metrics.charAccuracy),
-      runtime_errors: metrics.runtimeErrors,
+      runtime_errors_random: metrics.runtimeErrors,
+      regression_count: regressionMetrics.sampleCount,
+      regression_exact: toPercent(regressionMetrics.exactAccuracy),
+      regression_char: toPercent(regressionMetrics.charAccuracy),
+      runtime_errors_regression: regressionMetrics.runtimeErrors,
       gate_result: passed ? "PASS" : "FAIL"
     });
   };
