@@ -67,13 +67,40 @@
           };
         }
       };
+
+      (function loadOpenCv() {
+        const candidates = ["https://docs.opencv.org/4.x/opencv.js"];
+        let candidateIndex = 0;
+
+        const fail = () => {
+          const statusEl = document.getElementById("opencvStatus");
+          if (statusEl) {
+            statusEl.textContent =
+              "OpenCV.js failed to load. Check the external script URL or network access.";
+          }
+        };
+
+        const tryNext = () => {
+          if (candidateIndex >= candidates.length) {
+            fail();
+            return;
+          }
+
+          const script = document.createElement("script");
+          script.async = true;
+          script.src = candidates[candidateIndex];
+          script.type = "text/javascript";
+          script.onload = () => window.onOpenCvReady();
+          script.onerror = () => {
+            candidateIndex += 1;
+            tryNext();
+          };
+          document.body.appendChild(script);
+        };
+
+        tryNext();
+      })();
     </script>
-    <script
-      async
-      src="https://docs.opencv.org/4.10.0/opencv.js"
-      onload="onOpenCvReady();"
-      type="text/javascript"
-    ></script>
     <script src="./app.js"></script>
   </body>
 </html>
